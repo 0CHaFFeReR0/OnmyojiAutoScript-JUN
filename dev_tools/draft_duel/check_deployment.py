@@ -267,7 +267,7 @@ class DeploymentTests(unittest.TestCase):
 
     def deployment(self, fail_first=False, ready=True, reset_clock=True, expected=True,
                    missing_top=False, recover_after=None, defer_first=False, recover_on_redrag=False,
-                   prefilled=False):
+                   prefilled=False, unknown_round=None):
         owner = self.owner('队员')
         owner.draft_named_heads = [(n, n) for n in 'abcde']
         owner.draft_selected = list('abcde')
@@ -332,6 +332,8 @@ class DeploymentTests(unittest.TestCase):
         def identify(region, heads, **kw):
             self.assertEqual(heads, owner.draft_hand_templates)
             self.assertEqual(kw['scale'], .67)
+            if unknown_round is not None and region[1] - 3 == unknown_round:
+                return None
             if defer_first:
                 index = region[1] - 3
                 minimum = 3 if defer_first == 'third' else 2
@@ -357,7 +359,7 @@ class DeploymentTests(unittest.TestCase):
              patch('tasks.DraftDuel.runtime.deployment.identify_portrait',
                    side_effect=lambda *a, **kw: (identify(*a, **kw), .9)), \
              patch('tasks.DraftDuel.runtime.deployment.locate_portrait', side_effect=locate):
-            self.assertEqual(owner._deploy_shikigami_top_legacy(), expected)
+            self.assertEqual(owner._deploy_shikigami(), expected)
         return owner, candidates, state
 
     def test_prefilled_top_confirms_all_three_without_locating_or_dragging_hand(self):
@@ -464,11 +466,34 @@ class DeploymentTests(unittest.TestCase):
                              for c in owner.device.press_and_drag.call_args_list), 1)
         self.assertEqual(owner.appear_then_click.call_count, 3)
 
-    def test_unknown_card_never_triggers_redrag(self):
+    def test_unknown_first_slot_does_not_redrag(self):
         owner, _, _ = self.deployment(fail_first=True)
         self.assertEqual(owner.device.press_and_drag.call_count, 3)
         self.assertFalse(any(c.kwargs['name'].startswith('DraftDuel_redrag_')
                              for c in owner.device.press_and_drag.call_args_list))
+
+    def test_unknown_last_slot_redrags_once_then_defers(self):
+        owner, _, _ = self.deployment(unknown_round=2, expected=False)
+        redrags = [c for c in owner.device.press_and_drag.call_args_list
+                   if c.kwargs['name'].startswith('DraftDuel_redrag_')]
+        self.assertEqual(len(redrags), 1)
+        self.assertEqual(owner.appear_then_click.call_count, 3)
+        self.assertEqual(owner.draft_fielded, ('a', 'b'))
+
+    def test_target_fallback_accepts_scaled_target_only_when_best(self):
+        import cv2
+        rng = np.random.default_rng(77)
+        templates = tuple((n, rng.integers(0, 255, (41, 56, 3), dtype=np.uint8)) for n in 'abcde')
+        owner = self.owner('队员')
+        owner.draft_hand_templates = templates
+        target = dict(templates)['c']
+        scaled = cv2.resize(target, None, fx=0.71, fy=0.71)
+        region = np.zeros((66, 67, 3), dtype=np.uint8)
+        region[12:12+scaled.shape[0], 14:14+scaled.shape[1]] = scaled
+        self.assertGreater(owner._recognize_target_portrait(region, 'c'), .99)
+        self.assertIsNone(owner._recognize_target_portrait(region, 'a'))
+        self.assertIsNone(owner._recognize_target_portrait(None, 'c'))
+        self.assertIsNone(owner._recognize_target_portrait(np.zeros((66, 67, 3), dtype=np.uint8), 'c'))
 
     def test_retry_is_blocked_after_confirm_lock_epoch_change_or_prior_attempt(self):
         for overrides in ({'clicked': True}, {'locked': True}, {'redrag_attempted': True}, {'epoch': 1}):

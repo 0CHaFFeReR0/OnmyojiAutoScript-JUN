@@ -64,7 +64,7 @@ class ScriptTask(
                 self._finish_deployment_on_battle(state['pending'], state['slots'])
             self._save_draft_checkpoint(phase)
             if phase in ('rank', 'fight') and len(self.draft_selected) != 5:
-                raise TaskEnd('协同对弈恢复缺少本轮五名式神记录，不能猜测名字与头像对应关系')
+                self._leave_draft_team('恢复缺少本轮五名式神记录', success=False)
             if phase in ('battle', 'settlement'):
                 following = self._battle_and_settlement()
                 if following in ('rank', 'lobby'):
