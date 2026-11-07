@@ -6,21 +6,26 @@ import subprocess
 from deploy.config import ExecutionError
 
 OFFICIAL_REPOSITORY = 'https://github.com/xylolit-mu/OnmyojiAutoScript.git'
+ALLOWED_REPOSITORIES = (
+    'xylolit-mu/OnmyojiAutoScript',
+    '0CHaFFeReR0/OnmyojiAutoScript-JUN',
+)
 
 
-def is_official_repository(value):
-    # Accept GitHub's HTTPS and SSH spellings of the same repository only.
+def is_allowed_repository(value):
+    # Accept GitHub's HTTPS and SSH spellings of the allowed repositories only.
+    names = '|'.join(re.escape(name) for name in ALLOWED_REPOSITORIES)
     return bool(re.fullmatch(
         r'(?:https://github[.]com/|git@github[.]com:|ssh://git@github[.]com/)'
-        r'xylolit-mu/OnmyojiAutoScript(?:[.]git)?/?',
+        r'(?:' + names + r')(?:[.]git)?/?',
         str(value or '').strip(), re.IGNORECASE))
 
 
 def validate_update_source(git, root, repository, source='origin'):
     message = ('Repository source rejected: updates require '
-               + OFFICIAL_REPOSITORY
+               + ' or '.join(ALLOWED_REPOSITORIES)
                + '. No fetch or pull was performed.')
-    if not is_official_repository(repository):
+    if not is_allowed_repository(repository):
         raise ExecutionError(message)
     if not re.fullmatch(r'[A-Za-z0-9_-]+', source):
         raise ExecutionError(message)
@@ -33,5 +38,5 @@ def validate_update_source(git, root, repository, source='origin'):
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ExecutionError(message) from error
     urls = result.stdout.splitlines()
-    if result.returncode or not urls or not all(is_official_repository(u) for u in urls):
+    if result.returncode or not urls or not all(is_allowed_repository(u) for u in urls):
         raise ExecutionError(message)
