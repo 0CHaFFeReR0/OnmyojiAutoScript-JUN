@@ -184,7 +184,7 @@ page_login.add_enter_success_hooks(handle_login_page)
 
 # 庭院主页(此处通过提高阈值来处理部分探索章节会识别成原始庭院的问题, 后续有其他更好方法需改善)
 page_main = Page(
-    all_of(not_(GameUiAssets.I_CHECK_MAIN_SET), GameUiAssets.I_CHECK_MAIN),
+    all_of(not_(GameUiAssets.I_CHECK_MAIN_SET), any_of(GameUiAssets.I_CHECK_MAIN, GameUiAssets.I_CHECK_MAIN_HUD)),
     category="global",
 )
 page_main.add_enter_success_hooks(

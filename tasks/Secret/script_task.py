@@ -95,6 +95,9 @@ class ScriptTask(GameUi, GeneralBattle, SwitchSoul, SecretAssets):
                 break
             layer = self.find_battle()
             logger.info(f'Current layer: {layer}')
+            if layer and layer > con.max_layer:
+                logger.info(f'Reached max layer {con.max_layer}, stop secret zone')
+                break
             if not layer:
                 if self.appear(WeeklyTriflesAssets.I_WT_SE_SHARE):
                     logger.warning('You have completed the weekly trifles, skip')

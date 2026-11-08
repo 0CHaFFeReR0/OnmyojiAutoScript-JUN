@@ -286,8 +286,10 @@ class GameUiAssets:
 	I_CHECK_HEIAN_KITAN = RuleImage(roi_front=(27,48,47,39), roi_back=(27,48,47,39), threshold=0.8, method="Template matching", profile="High", file="./tasks/GameUi/page_checks/page_check_heian_kitan.png")
 	# 阵容助手页 
 	I_CHECK_LINEUP_HELPER = RuleImage(roi_front=(90,15,126,50), roi_back=(85,10,136,60), threshold=0.8, method="Template matching", profile="High", file="./tasks/GameUi/page_checks/page_check_lineup_helper.png")
-	# 庭院标志 
+	# 庭院标志
 	I_CHECK_MAIN = RuleImage(roi_front=(807,108,76,45), roi_back=(47,88,1046,102), threshold=0.95, method="Template matching", profile="High", file="./tasks/GameUi/page_checks/page_check_main.png")
+	# 庭院皮肤无关标志：底部导航栏「式神录」文字（HUD 不随庭院皮肤变化，兼容初语谧景/狐栖归处）
+	I_CHECK_MAIN_HUD = RuleImage(roi_front=(1104,662,72,32), roi_back=(1080,650,130,60), threshold=0.8, method="Template matching", profile="High", file="./tasks/GameUi/page_checks/page_check_main_hud.png")
 	# 珍旅居页面标志 
 	I_CHECK_TRAVEL = RuleImage(roi_front=(1134,583,78,77), roi_back=(1134,583,78,77), threshold=0.8, method="Template matching", profile="High", file="./tasks/GameUi/page_checks/page_check_travel.png")
 	# 式神录页面标志 

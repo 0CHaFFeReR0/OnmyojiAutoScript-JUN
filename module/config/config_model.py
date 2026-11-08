@@ -1,6 +1,7 @@
 # This Python file uses the following encoding: utf-8
 # @author runhey
 # github https://github.com/runhey
+from tasks.AccountBootstrap.config import AccountBootstrap
 from tasks.AutoStory.config import AutoStory
 from tasks.CustomTask.config import CustomTask, ENTRY_PREFIX
 from tasks.GuguArtStudio.config import GuguArtStudio
@@ -155,6 +156,7 @@ class ConfigModel(ConfigBase):
     memory_scrolls: MemoryScrolls = Field(default_factory=MemoryScrolls)
     auto_story: AutoStory = Field(default_factory=AutoStory)
     custom_task: CustomTask = Field(default_factory=CustomTask)
+    account_bootstrap: AccountBootstrap = Field(default_factory=AccountBootstrap)
 
     # 这些是每周任务
     true_orochi: TrueOrochi = Field(default_factory=TrueOrochi)

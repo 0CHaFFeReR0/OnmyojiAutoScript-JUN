@@ -43,7 +43,7 @@ class ConfigMenu:
         # 活动的任务
         self.menu["Activity Task"] = ['ActivityShikigami', 'MartialArts', 'MetaDemonTicket', 'MetaDemon', 'FrogBoss', 'FrogChallenge', 'FloatParade', 'LBS', 'Quiz', 'KittyShop', 'DyeTrials', 'GuguArtStudio', 'IbukiArena']
         # 游戏辅助
-        self.menu["gamehelper"] = ["AutoStory", "ExplorationFight", "CustomTask"]
+        self.menu["gamehelper"] = ["AutoStory", "ExplorationFight", "CustomTask", "AccountBootstrap"]
         # 开发工具
         self.menu["Tools"] = ['Image Rule', 'Ocr Rule', 'Click Rule', 'Long Click Rule', 'Swipe Rule', 'List Rule']
 
