@@ -460,10 +460,10 @@ class DeploymentTests(unittest.TestCase):
         drags = owner.device.press_and_drag.call_args_list
         self.assertEqual(drags[1].kwargs['name'], 'DraftDuel_redrag_a')
 
-    def test_persistently_wrong_known_card_is_redragged_only_once(self):
+    def test_persistently_wrong_known_card_is_redragged_three_times(self):
         owner, _, _ = self.deployment(fail_first='wrong')
         self.assertEqual(sum(c.kwargs['name'].startswith('DraftDuel_redrag_')
-                             for c in owner.device.press_and_drag.call_args_list), 1)
+                             for c in owner.device.press_and_drag.call_args_list), 3)
         self.assertEqual(owner.appear_then_click.call_count, 3)
 
     def test_unknown_first_slot_does_not_redrag(self):
@@ -496,15 +496,74 @@ class DeploymentTests(unittest.TestCase):
         self.assertIsNone(owner._recognize_target_portrait(np.zeros((66, 67, 3), dtype=np.uint8), 'c'))
 
     def test_retry_is_blocked_after_confirm_lock_epoch_change_or_prior_attempt(self):
-        for overrides in ({'clicked': True}, {'locked': True}, {'redrag_attempted': True}, {'epoch': 1}):
+        for overrides in ({'clicked': True}, {'locked': True}, {'redrags': 3},
+                          {'epoch': 1}, {'idle_checks': 2}):
             owner = self.owner('队长')
             owner._draft_deploy_epoch = 0
-            pending = dict(clicked=False, locked=False, epoch=0, index=0, name='a')
+            pending = dict(clicked=False, locked=False, epoch=0, index=0, name='a',
+                           redrags=0, idle_checks=5)
             pending.update(overrides)
             owner._locate_deployment_portrait = Mock()
             self.assertFalse(owner._retry_deployment_drag(pending, (0, 1, 2)))
             owner._locate_deployment_portrait.assert_not_called()
             owner.device.press_and_drag.assert_not_called()
+
+    def test_stable_locate_rejects_card_that_moved_between_frames(self):
+        owner = self.owner('队员')
+        owner.screenshot = Mock()
+        with patch.object(owner, '_locate_deployment_portrait',
+                          side_effect=[((574, 500, 89, 65), .9), ((683, 502, 89, 65), .9)]), \
+                patch('tasks.DraftDuel.runtime.deployment.time.sleep'):
+            self.assertIsNone(owner._locate_stable_deployment_portrait('head'))
+        with patch.object(owner, '_locate_deployment_portrait',
+                          side_effect=[((574, 500, 89, 65), .9), ((577, 503, 89, 65), .9)]), \
+                patch('tasks.DraftDuel.runtime.deployment.time.sleep'):
+            self.assertEqual(owner._locate_stable_deployment_portrait('head'),
+                             ((577, 503, 89, 65), .9))
+
+    def test_wrong_top_falls_back_only_near_countdown_end_or_after_long_wait(self):
+        owner = self.owner('队员')
+        now = [1000.0]
+        owner._draft_deploy_time = 30
+        owner._draft_deploy_clock_wall = 1000.0
+        with patch('tasks.DraftDuel.runtime.deployment.time.time',
+                   side_effect=lambda: now[0]):
+            pending = {'idle_checks': 0}
+            self.assertFalse(owner._deployment_fallback_due(pending))
+            pending['idle_checks'] = 39
+            self.assertFalse(owner._deployment_fallback_due(pending))
+            pending['idle_checks'] = 40
+            self.assertTrue(owner._deployment_fallback_due(pending))
+            pending['idle_checks'] = 3
+            owner._draft_deploy_time = 8
+            now[0] = 1000.5
+            self.assertTrue(owner._deployment_fallback_due(pending))
+            now[0] = 1030.0
+            self.assertFalse(owner._deployment_fallback_due(pending))
+
+    def test_drag_waits_for_layout_settle_after_countdown_reset(self):
+        owner = self.owner('队长')
+        now = [1000.0]
+        with patch('tasks.DraftDuel.runtime.deployment.time.monotonic',
+                   side_effect=lambda: now[0]):
+            self.assertTrue(owner._deployment_drag_ready())
+            owner._draft_deploy_slot_wall = 1000.0
+            now[0] = 1003.0
+            self.assertFalse(owner._deployment_drag_ready())
+            now[0] = 1004.2
+            self.assertTrue(owner._deployment_drag_ready())
+
+    def test_top_check_waits_after_drag_before_judging_mismatch(self):
+        owner = self.owner('队长')
+        now = [1000.0]
+        entry = {'verify_after': 1001.2}
+        with patch('tasks.DraftDuel.runtime.deployment.time.monotonic',
+                   side_effect=lambda: now[0]):
+            self.assertTrue(owner._deployment_verify_pending(entry))
+            now[0] = 1001.5
+            self.assertFalse(owner._deployment_verify_pending(entry))
+            self.assertFalse(owner._deployment_verify_pending({}))
+            self.assertFalse(owner._deployment_verify_pending({'verify_after': 9000.0}))
 
     def test_confirms_only_after_wrong_top_recovers_to_target(self):
         owner, _, state = self.deployment(fail_first='wrong', recover_after=2)

@@ -402,7 +402,10 @@ class GeneralInvite(BaseTask, GeneralInviteAssets):
     def _normalize_friend_name_text(text: str) -> str:
         if text is None:
             return ''
-        return str(text).replace(' ', '').replace('　', '').strip()
+        # OCR 常把名字末尾的「丶」(U+4E36) 读成「、」(U+3001) 或直接吞掉，
+        # 逐字匹配前统一剔除这类近形点号，否则「吃瓜群众丶」永远匹配不上。
+        noise = ' \u3000\u4e36\u3001\u00b7\u2022.\u3002\uff0c,'
+        return str(text).translate(str.maketrans('', '', noise)).strip()
 
     def _find_exact_friend_area(self, rule, name: str) -> tuple[int, int, int, int] | None:
         target_name = self._normalize_friend_name_text(name)

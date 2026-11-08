@@ -16,6 +16,10 @@ TARGET_PORTRAIT_SCALES = tuple(
     for step in (-0.04, -0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04))
 TARGET_PORTRAIT_THRESHOLD = 0.70
 TARGET_PORTRAIT_MARGIN = 0.02
+# 倒计时重开后手牌与槽位要重排，实测三秒内松手都会被吞掉，留到四秒。
+DEPLOY_RESET_SETTLE = 4.0
+# 拖拽落点生效后约 0.8 秒顶部才换成新头像，过早识别会读到被顶掉的旧头像。
+DEPLOY_VERIFY_DELAY = 1.2
 
 
 class DraftDuelDeploymentMixin:
@@ -42,6 +46,58 @@ class DraftDuelDeploymentMixin:
                                 f'{threshold:.2f}, score={located[1]:.3f}')
                 return located
         return None
+
+    def _locate_stable_deployment_portrait(self, head, *, scale=1.0, settle=0.3, tolerance=6):
+        """连续两帧定位到同一位置才拖拽，避免手牌滑动途中按到相邻式神。"""
+        self.screenshot()
+        first = self._locate_deployment_portrait(head, scale=scale)
+        if first is None:
+            return None
+        time.sleep(settle)
+        self.screenshot()
+        second = self._locate_deployment_portrait(head, scale=scale)
+        if second is None:
+            return None
+        if (abs(second[0][0] - first[0][0]) > tolerance
+                or abs(second[0][1] - first[0][1]) > tolerance):
+            logger.info(f'DraftDuel hand card still moving: {first[0]} -> {second[0]}')
+            return None
+        return second
+
+    def _deployment_remaining(self):
+        """返回本阶段倒计时剩余秒数；读数超过3秒未更新时视为未知。"""
+        value = getattr(self, '_draft_deploy_time', None)
+        wall = getattr(self, '_draft_deploy_clock_wall', None)
+        if value is None or wall is None or time.time() - wall > 3:
+            return None
+        return value - max(0.0, time.time() - wall)
+
+    def _deployment_fallback_due(self, pending):
+        """顶部持续不匹配时，只有倒计时快结束或等待过久才确认，给补拖留足时间。"""
+        if pending.get('idle_checks', 0) >= 40:
+            return True
+        remaining = self._deployment_remaining()
+        return remaining is not None and remaining <= 8
+
+    def _deployment_drag_ready(self):
+        """倒计时重开后槽位与手牌会重新排列，等布局稳定再拖拽。"""
+        wall = getattr(self, '_draft_deploy_slot_wall', None)
+        if wall is None:
+            return True
+        elapsed = time.monotonic() - wall
+        if not 0 <= elapsed < DEPLOY_RESET_SETTLE:
+            return True
+        self._log_deployment_wait('等待槽位与手牌重排稳定后再拖拽')
+        return False
+
+    def _deployment_verify_pending(self, entry):
+        """拖拽后短时间内顶部仍显示被顶掉的旧头像，先不判不匹配也不补拖。"""
+        deadline = entry.get('verify_after')
+        if not isinstance(deadline, (int, float)):
+            return False
+        remaining = deadline - time.monotonic()
+        # 上限留余量，浮点误差不能把刚写入的截止时间判成过期。
+        return 0 < remaining <= DEPLOY_VERIFY_DELAY + 0.5
 
     def _capture_deployment_hand_templates(self, countdown=None):
         """大轮首次进入上阵，按手牌从左到右绑定此前五次选人名单。"""
@@ -103,6 +159,7 @@ class DraftDuelDeploymentMixin:
             if candidate is None or not 0 <= candidate - value <= 2:
                 return
             self._draft_deploy_epoch += 1
+            self._draft_deploy_slot_wall = time.monotonic()
             logger.info(f'DraftDuel deployment countdown reset confirmed: {previous} -> {value}')
         self._draft_clock_candidate = None
         self._draft_deploy_time = value
@@ -193,20 +250,22 @@ class DraftDuelDeploymentMixin:
             logger.info(f"DraftDuel deployment record updated: planned={pending['name']}, "
                         f'actual={actual}; continue with actual roster')
 
-    def _retry_deployment_drag(self, pending, slots):
-        """顶部明确为其他式神时，重新定位目标手牌并至多补拖一次。"""
-        if (pending['clicked'] or pending.get('locked') or pending.get('redrag_attempted')
+    def _retry_deployment_drag(self, pending, slots, blind=False):
+        """顶部明确为其他式神时，重新定位目标手牌并补拖，最多三次；顶部读空只盲补一次。"""
+        if (pending['clicked'] or pending.get('locked')
                 or self._draft_deploy_epoch != pending['epoch']):
+            return False
+        if pending.get('redrags', 0) >= 3 or pending.get('idle_checks', 0) < 3:
+            return False
+        if blind and pending.get('blind_redrags', 0) >= 1:
             return False
         if not self._wait_select_ensure():
             return False
-        pending['redrag_attempted'] = True
-        self._save_draft_checkpoint('fight')
         head = next((image for name, image in self.draft_hand_templates
                      if name == pending['name']), None)
         if head is None:
             return False
-        located = self._locate_deployment_portrait(head, scale=1.0)
+        located = self._locate_stable_deployment_portrait(head)
         destinations = self.runframe(self.F_FIGHT_SHIKIGAMI_SET)
         if located is None or not destinations or len(destinations) != 6:
             logger.warning(f"DraftDuel cannot re-drag {pending['name']}: hand or destination unavailable")
@@ -215,10 +274,14 @@ class DraftDuelDeploymentMixin:
         destination = destinations[slots[pending['index']]]
         center = lambda area: (int(area[0] + area[2]/2), int(area[1] + area[3]/2))
         logger.warning(f"DraftDuel top shows {pending.get('preview') or 'empty'} instead of "
-                       f"{pending['name']}; re-located hand score={score:.3f}, re-drag once")
+                       f"{pending['name']}; re-located hand score={score:.3f}, "
+                       f"re-drag {pending.get('redrags', 0) + 1}/3")
         self.device.press_and_drag(center(source), center(destination), hold_duration=0.2,
                                    swipe_duration=0.45, name=f"DraftDuel_redrag_{pending['name']}")
-        pending.update(failures=0, preview=None, preview_stable=0, actual=None, stable=0)
+        pending.update(failures=0, preview=None, preview_stable=0, actual=None, stable=0,
+                       redrags=pending.get('redrags', 0) + 1, idle_checks=0,
+                       blind_redrags=pending.get('blind_redrags', 0) + (1 if blind else 0),
+                       verify_after=time.monotonic() + DEPLOY_VERIFY_DELAY)
         pending.pop('portrait_sample', None)
         self._save_draft_checkpoint('fight')
         return True
@@ -305,6 +368,7 @@ class DraftDuelDeploymentMixin:
             self.draft_deployment_rounds = []
             self._draft_deploy_time = None
             self._draft_deploy_clock_wall = None
+            self._draft_deploy_slot_wall = None
             self._draft_deploy_epoch = 0
             state = {'next_epoch': 0, 'slots': None, 'pending': None}
         self._draft_deployment_wait_reason = None
@@ -368,11 +432,12 @@ class DraftDuelDeploymentMixin:
                     pending['preview_stable'] = 0
                     pending.pop('portrait_sample', None)
                     pending['failures'] = min(3, pending.get('failures', 0) + 1)
-                    if pending['failures'] >= 3:
+                    pending['idle_checks'] = pending.get('idle_checks', 0) + 1
+                    if pending['failures'] >= 3 and self._deployment_fallback_due(pending):
                         if self._wait_select_ensure():
                             pending['clicked'] = bool(self.appear_then_click(self.I_SELECT_ENSURE, interval=1))
                         if pending['clicked']:
-                            logger.warning('DraftDuel top portrait unavailable after three checks; confirm fallback')
+                            logger.warning('DraftDuel top portrait unavailable near countdown end; confirm fallback')
                             self._save_draft_checkpoint('fight')
                     else:
                         self._log_deployment_wait(f"目标={pending['name']}，顶部栏未完整识别，等待重试")
@@ -394,6 +459,11 @@ class DraftDuelDeploymentMixin:
                 continue
             if pending is not None:
                 index = pending['index']
+                if not pending['clicked'] and self._deployment_verify_pending(pending):
+                    time.sleep(0.3)
+                    continue
+                if not pending['clicked']:
+                    pending['idle_checks'] = pending.get('idle_checks', 0) + 1
                 complete, actual = self._best_of_two_portraits(pending, portraits[slots[index]])
                 if not complete:
                     time.sleep(0.3)
@@ -407,19 +477,25 @@ class DraftDuelDeploymentMixin:
                 pending['preview'] = actual
                 pending['preview_stable'] = 2 if actual else 0
                 if not pending['clicked']:
+                    mismatched = actual != pending['name']
                     last_slot = pending['index'] == len(slots) - 1
                     retry_due = actual is not None or (
-                        last_slot and pending.get('failures', 0) >= 1)
-                    if (actual != pending['name'] and retry_due
-                            and self._retry_deployment_drag(pending, slots)):
+                        last_slot and pending.get('idle_checks', 0) >= 3)
+                    if mismatched and retry_due and not self._deployment_drag_ready():
                         time.sleep(0.3)
                         continue
-                    if actual != pending['name']:
+                    if (mismatched and retry_due
+                            and self._retry_deployment_drag(pending, slots, blind=actual is None)):
+                        time.sleep(0.3)
+                        continue
+                    if mismatched:
                         pending['failures'] = min(3, pending.get('failures', 0) + 1)
-                    if (actual == pending['name'] and pending['preview_stable'] >= 2) or pending.get('failures', 0) >= 3:
+                    if ((not mismatched and pending['preview_stable'] >= 2)
+                            or (mismatched and self._deployment_fallback_due(pending))):
                         self._draft_deployment_wait_reason = None
-                        if actual != pending['name']:
-                            logger.warning(f"DraftDuel target={pending['name']}, actual={actual}; confirm after three failed checks")
+                        if mismatched:
+                            logger.warning(f"DraftDuel target={pending['name']}, actual={actual}; "
+                                           'out of retries or countdown ending, confirm actual')
                         if self._wait_select_ensure():
                             pending['clicked'] = bool(self.appear_then_click(self.I_SELECT_ENSURE, interval=1))
                         if pending['clicked']:
@@ -427,7 +503,7 @@ class DraftDuelDeploymentMixin:
                             logger.info(f"DraftDuel round {index + 1}: select_ensure clicked")
                     else:
                         self._log_deployment_wait(
-                            f"目标={pending['name']}，顶部识别={actual}，两次识别最佳结果={actual}，等待重试")
+                            f"目标={pending['name']}，顶部识别={actual}，等待补拖或倒计时收尾")
                 elif actual and actual not in self.draft_fielded:
                     pending['actual'], pending['stable'] = actual, 2
                     if pending['stable'] >= 2 and pending['locked']:
@@ -473,7 +549,8 @@ class DraftDuelDeploymentMixin:
                     continue
                 pending = {'index': index, 'name': name, 'failures': 0, 'clicked': False,
                            'stable': 0, 'locked': False, 'epoch': self._draft_deploy_epoch,
-                           'preview': name, 'preview_stable': 2}
+                           'preview': name, 'preview_stable': 2,
+                           'redrags': 0, 'idle_checks': 0}
                 self._draft_deployment_state = {
                     'next_epoch': next_epoch, 'slots': slots, 'pending': pending,
                     'completed': completed, 'deferred': deferred}
@@ -485,19 +562,22 @@ class DraftDuelDeploymentMixin:
                 recovering = False
                 time.sleep(0.3)
                 continue
+            if not self._deployment_drag_ready():
+                time.sleep(0.3)
+                continue
             destinations = self.runframe(self.F_FIGHT_SHIKIGAMI_SET)
             if not destinations or len(destinations) != 6:
                 self._log_deployment_wait('未识别到六个上阵目标位置')
                 time.sleep(0.3)
                 continue
             head = next(h for n, h in remaining_heads if n == name)
-            located = self._locate_deployment_portrait(head, scale=1.0)
-            if located is None:
-                self._log_deployment_wait(f'第{index + 1}次上阵目标={name}，整个手牌back内未匹配到目标')
+            if not self._wait_select_ensure():
+                self._log_deployment_wait(f'第{index + 1}次上阵目标={name}，等待 select_ensure')
                 time.sleep(0.3)
                 continue
-            if not self._wait_select_ensure():
-                self._log_deployment_wait(f'已识别手牌{name}，等待 select_ensure')
+            located = self._locate_stable_deployment_portrait(head)
+            if located is None:
+                self._log_deployment_wait(f'第{index + 1}次上阵目标={name}，手牌未稳定匹配到目标')
                 time.sleep(0.3)
                 continue
             self._draft_deployment_wait_reason = None
@@ -508,7 +588,9 @@ class DraftDuelDeploymentMixin:
             self.device.press_and_drag(center(source), center(destination), hold_duration=0.2,
                                        swipe_duration=0.45, name=f'DraftDuel_deploy_{name}')
             pending = {'index': index, 'name': name, 'failures': 0, 'clicked': False,
-                       'stable': 0, 'locked': False, 'epoch': self._draft_deploy_epoch}
+                       'stable': 0, 'locked': False, 'epoch': self._draft_deploy_epoch,
+                       'redrags': 0, 'idle_checks': 0,
+                       'verify_after': time.monotonic() + DEPLOY_VERIFY_DELAY}
             recovering = False
             time.sleep(0.3)
         logger.warning('DraftDuel deployment timed out without identifying actual lineup')

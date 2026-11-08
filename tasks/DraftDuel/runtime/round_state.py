@@ -59,6 +59,7 @@ class DraftDuelRoundStateMixin:
         self._draft_battle_seen = False
         self._draft_clock_candidate = None
         self._draft_deploy_clock_wall = None
+        self._draft_deploy_slot_wall = None
         self._draft_end_recorded = False
         self._draft_deployment_state = None
         self._draft_match_state = None
